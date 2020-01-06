@@ -3,9 +3,7 @@
 #define DBJ_SQL_PP_INCLUDED
 
 #include "sqlite++.h"
-#include "../dbj--nanolib/dbj++valstat.h"
-// local testing --> #include "D:\DEVL\GitHub\dbj--nanolib\dbj++status.h"
-//#include <optional>
+#include "sqlite_valstat.h"
 
 namespace dbj::sql
 {
@@ -15,16 +13,12 @@ namespace dbj::sql
 	using namespace ::std::literals::string_view_literals;
 
 	enum semver {
-		major= 2, minor = 5, patch = 0
+		major = 3, minor = 0, patch = 0
 	};
 
-	constexpr inline auto version = "2.5.0";
+	// 3.0.0 is first version with dbj::valstat
+	constexpr inline auto version = "3.0.0";
 	constexpr inline auto product = "DBJ SQLITE -- (c) 2020 by dbj@dbj.org -- licence CC BY SA 4.0";
-}
-
-#include "sqlite_valstat.h"
-
-namespace dbj::sql {
 
 	using uchar = unsigned char;
 	using binary_type = typename std::vector< uchar >;
@@ -232,9 +226,9 @@ namespace dbj::sql {
 
 				if (SQLITE_BLOB != type()) return {};
 				// Get the pointer to data
-				unsigned char* p = (unsigned char*)sqlite3_column_blob(statement_, col_index_);
+				unsigned char* p = (unsigned char*)sqlite::sqlite3_column_blob(statement_, col_index_);
 				// Get the size of the std::vector
-				int size = sqlite3_column_bytes(statement_, col_index_);
+				int size = sqlite::sqlite3_column_bytes(statement_, col_index_);
 				//
 				return binary_type(p, p + size);
 
@@ -294,7 +288,7 @@ namespace dbj::sql {
 			column_transformer(sqlite::sqlite3_stmt* stmt_, int column_idx_)
 				: col_index_(column_idx_), statement_(stmt_)
 			{}
-		};
+		}; // column_transformer
 
 		/*
 		return the transformer for particular column
@@ -365,27 +359,27 @@ namespace dbj::sql {
 		this function by design does not return a value
 		just the dbj_sql_valstat
 		*/
-		[[nodiscard]] static dbj_sql_valstat
+		[[nodiscard]] static sqlite_status_code
 			dbj_sqlite_open(connection_handle& handle_, char const* filename)	noexcept
 		{
 			sqlite_status_code ssc_;
 			handle_.reset(ssc_);
 			// on error return, do not open the db
-			if (is_sqlite_error(ssc_)) return DBJ_SQL_VALSTAT_ERR(ssc_);
+			if (is_sqlite_error(ssc_)) return ssc_;
 
 			// try to open then return the dbj_sql_valstat of the operation
-			return DBJ_SQL_VALSTAT(sqlite::sqlite3_open(filename, handle_.get_address_of()));
+			return sqlite_status_code(sqlite::sqlite3_open(filename, handle_.get_address_of()));
 		}
 
-		[[nodiscard]] dbj_sql_valstat
+		[[nodiscard]] sqlite_status_code
 			prepare_statement(char const* query_, statement_handle& statement_) const noexcept
 		{
 			DBJ_ASSERT(query_);
 			if (!handle)
-				return DBJ_SQL_VALSTAT_ERR(sqlite_status_code::sqlite_misuse);
+				return sqlite_status_code::sqlite_misuse;
 
 
-			return DBJ_SQL_VALSTAT(sqlite::sqlite3_prepare_v2(
+			return sqlite_status_code(sqlite::sqlite3_prepare_v2(
 				handle.get(),
 				query_,
 				-1,
@@ -407,7 +401,7 @@ namespace dbj::sql {
 		database& operator = (database&&) = delete;
 
 		// can *not* throw from this constructor
-		explicit database(char const* storage_name, dbj_sql_valstat& sl_) noexcept
+		explicit database(char const* storage_name, sqlite_status_code& sl_) noexcept
 		{
 			sl_ = dbj_sqlite_open(this->handle, storage_name);
 
@@ -430,7 +424,7 @@ namespace dbj::sql {
 		sqlite::sqlite3_create_function(db, "palindrome", 1, SQLITE_UTF8, NULL, &palindrome, NULL, NULL);
 		for the palindrome function see the require signature bellow
 		*/
-		[[nodiscard]] dbj_sql_valstat register_user_defined_function
+		[[nodiscard]] sqlite_status_code register_user_defined_function
 		(
 			char const* udf_name,
 			void(__cdecl* udf_)(sqlite::sqlite3_context*, int, sqlite::sqlite3_value**)
@@ -438,9 +432,9 @@ namespace dbj::sql {
 		{
 			DBJ_ASSERT(udf_name);
 			if (!handle)
-				return DBJ_SQL_VALSTAT_ERR(sqlite_status_code::sqlite_misuse);
+				return sqlite_status_code::sqlite_misuse;
 
-			return DBJ_SQL_VALSTAT(
+			return sqlite_status_code(
 				sqlite::sqlite3_create_function(
 					handle.get(),
 					udf_name,
@@ -457,19 +451,19 @@ namespace dbj::sql {
 		call with a query and a callback, return dbj_sql_valstat
 		no error is SQLITE_DONE or SQLITE_OK
 		*/
-		[[nodiscard]] dbj_sql_valstat query(
+		[[nodiscard]] sqlite_status_code query(
 			char const* query_,
 			cursor_callback  row_user_
 		) const noexcept
 		{
 			if (!handle)
-				return DBJ_SQL_VALSTAT_ERR(sqlite_status_code::sqlite_misuse);
+				return sqlite_status_code::sqlite_misuse;
 
 			// will release the statement upon exit
 			statement_handle statement_;
 
 			// return if prepare_statement returnd an error state
-			dbj_sql_valstat status = prepare_statement(query_, statement_);
+			sqlite_status_code status = prepare_statement(query_, statement_);
 			if (is_error(status)) return status; // return on error
 
 #ifdef _DEBUG
@@ -492,7 +486,7 @@ namespace dbj::sql {
 			//if (sql_result == (int)dbj::sql::status_code::sqlite_done)
 			//	return {  sql_result , DBJ_LOCATION };
 
-			return DBJ_SQL_VALSTAT(sql_result); //  , DBJ_ERR_PROMPT("sqlite3_step() has failed"));
+			return sqlite_status_code(sql_result); //  , DBJ_ERR_PROMPT("sqlite3_step() has failed"));
 		}
 		/*
 		 execute SQL statements through here
@@ -506,7 +500,7 @@ namespace dbj::sql {
 			return 0;
 		}
 		*/
-		[[nodiscard]] dbj_sql_valstat exec(
+		[[nodiscard]] sqlite_status_code exec(
 			const char* sql_,
 			int (*callback)(void*, int, char**, char**) = nullptr
 		) const noexcept
@@ -516,21 +510,21 @@ namespace dbj::sql {
 
 			// in release build 
 			if (!sql_)
-				return DBJ_SQL_VALSTAT_ERR(sqlite_status_code::sqlite_misuse);
+				return sqlite_status_code::sqlite_misuse;
 
-			if (!handle) return DBJ_SQL_VALSTAT_ERR(sqlite_status_code::sqlite_misuse);
+			if (!handle) return sqlite_status_code::sqlite_misuse;
 
 			if (callback) {
 				// will release the statement upon exit
 				statement_handle statement_;
 
 				// return if prepare_statement returnd an error state
-				dbj_sql_valstat status = prepare_statement(sql_, statement_);
+				sqlite_status_code status = prepare_statement(sql_, statement_);
 				if (is_error(status)) return status; // return on error
 
 				cursor_iterator criter_{ statement_.get() };
 
-				return DBJ_SQL_VALSTAT(sqlite::sqlite3_exec(
+				return sqlite_status_code(sqlite::sqlite3_exec(
 					handle.get(), /* An open database */
 					sql_,		/* SQL to be evaluated */
 					callback,	/* Callback function */
@@ -540,7 +534,7 @@ namespace dbj::sql {
 			}
 			else {
 
-				return DBJ_SQL_VALSTAT(sqlite::sqlite3_exec(
+				return sqlite_status_code(sqlite::sqlite3_exec(
 					handle.get(), /* An open database */
 					sql_,		/* SQL to be evaluated */
 					nullptr,	/* Callback function */
@@ -689,7 +683,7 @@ namespace dbj::sql {
 		void(*) (const udf_argument&, const udf_retval&);
 
 	using sqlite3_udf_type = void(__cdecl*)
-		(sqlite::sqlite3_context* context, int argc, sqlite::sqlite3_value** argv);
+		(sqlite::sqlite3_context * context, int argc, sqlite::sqlite3_value * *argv);
 
 	template<dbj_sql_udf_type udf_>
 	struct udf_holder final
@@ -709,7 +703,7 @@ namespace dbj::sql {
 	}; // udf_holder
 
 	template<dbj_sql_udf_type dbj_udf_>
-	[[nodiscard]] inline dbj_sql_valstat
+	[[nodiscard]] inline sqlite_status_code
 		register_dbj_udf(
 			database const& db,
 			char const* dbj_udf_name_
@@ -750,7 +744,7 @@ namespace dbj::sql {
 	1|json|JSON|0||0
 	2|name|TEXT|0||0
 	*/
-	[[nodiscard]] inline dbj_sql_valstat
+	[[nodiscard]] inline sqlite_status_code
 		table_info(
 			database const& db,
 			std::string_view		table_name,
@@ -761,7 +755,7 @@ namespace dbj::sql {
 	}
 
 	// list of all tables and views
-	[[nodiscard]] inline dbj_sql_valstat
+	[[nodiscard]] inline sqlite_status_code
 		list_all_tables_and_views
 		(database const& db, cursor_callback result_callback_)	noexcept
 	{
@@ -791,58 +785,51 @@ namespace dbj::sql {
 		return SQLITE_OK; // mandatory
 	}
 
-	/*
-	when actually obtaining the instance of the sql::database callers
-	most comfortable experience is:
-		auto [DB,STAT] = demo_db() ;
-		if ( ! DB )  ... error ...
-	types and mechanism to implement this we encapsulate here
+	///<summary>
+	///IMPORTANT: we use std::reference_wrapper<sql::database> since sql::database is
+	///neither moveable or copyable, which solution is again completely encapsulated in here.
+	///</summary>
 
-	IMPORTANT: we use std::reference_wrapper<sql::database> since sql::database is
-	neither moveable or copyable, which solution is again completely encapsulated in here.
-	*/
-	using db_and_status_trait
-		= typename sql::sqlite3_valstat_trait_template< std::reference_wrapper<sql::database> >;
-	using db_valstat = typename db_and_status_trait::return_type;
+	using db_valstat = dbj_sql_valstat< std::reference_wrapper<sql::database> >;
 
-	/*
-	dbj_holder is callable object actually keeping the static instance of
-	the sql::database type. simple example is using lambda
-
-		auto db_instance_holder =
-			[](sql::dbj_sql_valstat& sqlite3_status)
-			-> std::reference_wrapper<sql::database>
-		{
-			static sql::database db(":memory:", sqlite3_status);
-			return db;
-		};
-
-		above we also see the required signature:
-
-		std::reference_wrapper<sql::database> ( sql::dbj_sql_valstat & );
-
-
-	*/
+	///<summary>
+	///dbj_holder is callable object actually keeping the static instance of
+	///the sql::database type. simple example is using lambda
+	///<code>
+	///	auto db_instance_holder =
+	///		[](sql::sqlite_status_code& sqlite3_status)
+	///		-> std::reference_wrapper<sql::database>
+	///	{
+	///		static sql::database db(":memory:", sqlite3_status);
+	///		return db;
+	///	};
+	///</code>
+	///	above we also see the required signature:
+	///<code>
+	///	std::reference_wrapper<sql::database> ( sql::sqlite_status_code & );
+	///</code>
+	///</summary>
 	inline db_valstat db_initor
-	(std::reference_wrapper<sql::database>(* db_holder)(sql::dbj_sql_valstat&), 
-		const char* SQL)
+	(
+		std::reference_wrapper<sql::database>(*db_holder)(sql::sqlite_status_code&),
+		const char* SQL
+	)
 	{
-		sql::dbj_sql_valstat sqlite3_status;
+		sql::sqlite_status_code sqlite3_status;
 		// sql::database constructor does not throw on error
 		// it has the status to report 
 		std::reference_wrapper<sql::database> dbref = db_holder(sqlite3_status);
+
 		// the caller will decide on the course of action
 		if (sql::is_error(sqlite3_status))
-			return DBJ_STATVAL_ERR(
-				db_and_status_trait, *sqlite3_status.first
-			);
-		// create the database 
+			return { {} , sqlite3_status };
+
+		// call the exec method on the database instance
 		if (sql::is_error(sqlite3_status = dbref.get().exec(SQL)))
-			return DBJ_STATVAL_ERR(
-				db_and_status_trait, *sqlite3_status.first
-			);
+			return { {} , sqlite3_status };
+
 		// at last success
-		return DBJ_STATVAL_OK(db_and_status_trait, dbref);
+		return { dbref, {} };
 	};
 
 #pragma endregion

@@ -1,81 +1,15 @@
-#pragma once
 /* (c) 2019 by dbj.org   -- CC BY-SA 4.0 -- https://creativecommons.org/licenses/by-sa/4.0/ */
 
-#ifndef _DBJ_SQLITE_STATUS_INC_
-#define _DBJ_SQLITE_STATUS_INC_
+#ifndef _DBJ_SQLITE_VALSTAT_INC_
+#define _DBJ_SQLITE_VALSTAT_INC_
 
-/*
-to use dbj nanolib return type concept for
-another module/library one needs to provide
-
-1. value type
-	if user defined type, the only requirement is  that 'optional' can use it
-2. status code type, example: std::errc
-3. "code to message" function, of the signature
-	 buffer_type ( code_type )
-4. "code to int" function of the signature
-	int ( code_type ) ;
-5.	"category name" function
-	example: constexpr auto category_name() { return "posix"; }
-
-	With those user next defines the 'service' for making the required
-	return and/or status types, example, for 'posix' evailable in dbj::nanolib :
-
-		template <typename T>
-	using posix_retval_service = return_type_service<
-		// value type
-		T,
-		//  code type
-		std::errc,
-		// code to message
-		posix::code_to_message,
-		// code to int
-		posix::code_to_int,
-		// category name
-		posix::category_name>;
-
-Where `return_type_service` is a template matching the following synopsis:
-*/
-//	template <
-//		typename value_type_,
-//		typename code_type_param, /* has to be castable to int */
-//v_buffer::buffer_type(*code_to_message)(code_type_param),
-//int (*code_to_int)(code_type_param),
-//char const* (*category_name)()
-//	>
-//	struct return_type_service final
-//{
-//	using type = return_type_service;
-//	using value_type = value_type_;
-//	using return_type = pair< optional<value_type>, optional<status_type> >;
-//	using code_type = code_type_param;
-//	constexpr static inline char const* category = category_name();
-//
-//	static status_type make_status(code_type code, char const* file, long line);
-//
-//	/* just make info status */
-//	static status_type make_status(char const* information, char const* file, long line);
-//
-//	// no value, status present,  means error
-//	// --> { { } , { status } }
-//	static return_type make_error(status_type status_);
-//
-//	// value, no status is normal return
-//	// status part is redundant --> { { value } , { } }
-//	static return_type make_ok(value_type /*const&*/ value_);
-//
-//	// both status and value we cann "info return"
-//	// --> { { value } , { status } }
-//	static return_type make_full(value_type /*const&*/ value_, status_type status_);
-//}; // return_type_service
+#include "../dbj--nanolib/dbj++valstat.h"
 
 namespace dbj::sql
 {
 	// using namespace std;
 	using buffer = typename dbj::nanolib::v_buffer;
-	using buffer_type  = typename buffer::buffer_type;
-
-	#define DBJ_SQL_INNER_NS
+	using status_type  = dbj::nanolib::status_type ;
 
 	constexpr const char* category_name() { return "sqlite3"; }
 
@@ -127,7 +61,7 @@ namespace dbj::sql
 			function argument is int so that native sqlite3 return values can be
 			used also
 			*/
-		inline buffer_type err_message_sql(int sqlite_return_value)  noexcept
+		inline status_type err_message_sql(int sqlite_return_value)  noexcept
 		{
 			if (const char* mp_ = ::sqlite::sqlite3_errstr(sqlite_return_value); mp_ != nullptr)
 				return buffer::make(mp_);
@@ -136,7 +70,7 @@ namespace dbj::sql
 		}
 
 		// this overload is required by nanolib valstat service
-		inline buffer_type err_message_sql(sqlite_status_code code_)  noexcept
+		inline status_type err_message_sql(sqlite_status_code code_)  noexcept
 		{
 			return err_message_sql(int(code_));
 		}
@@ -161,108 +95,27 @@ namespace dbj::sql
 			};
 		}
 
-		// sqlite api returns int status codes basically
+		// sqlite api returns int as status codes basically
 		inline constexpr bool is_sqlite_error(int sqlite3_result_) noexcept
 		{
 			return is_sqlite_error(sqlite_status_code (sqlite3_result_));
 		}
 
-	template <typename T>
-	using sqlite3_valstat_trait_template = ::dbj::nanolib::valstat_trait<
-		// value type
-		T,
-		//  code type
-		DBJ_SQL_INNER_NS sqlite_status_code,
-		// code to message
-		DBJ_SQL_INNER_NS err_message_sql,
-		// code to int
-		DBJ_SQL_INNER_NS code_to_int,
-		// category name
-		DBJ_SQL_INNER_NS category_name>;
+/*
+--------------------------------------------------------------------------------------------
+*/
+			template < typename T_ >
+			using dbj_sql_valstat =  dbj::valstat< T_ , sqlite_status_code >;
+/*
+--------------------------------------------------------------------------------------------
+*/
 
-	/*
-	here is the important part:
-	because value/status concept is flexible it is powerfull
-	and that put together makes it complex to setup 
-	not complex to use
-
-	So. In the context of the domain of this library we need sqlite3 codes
-	to be values returned, often but not always.
-
-	So, we will create that type here 
-	*/
-	using sqlite3_valstat_trait = typename sqlite3_valstat_trait_template<DBJ_SQL_INNER_NS sqlite_status_code>;
-	using dbj_sql_valstat = typename sqlite3_valstat_trait::return_type;
-
-
-	/*
-	in this solution domian we do not use always "if no value then error" logic
-	we rather always check with the method above if the value returned
-	is treated by sqlite3 as error
-	*/
-	inline constexpr bool is_error
-	(dbj_sql_valstat const& sqlite3_rt)
+	inline constexpr bool is_error	(sqlite_status_code const& sqlite3_rt)
 	{
-		auto optival = sqlite3_rt.first;
-		// no value so def. an error
-		if (!optival) return true;
-		// yes value, check is it an error by sqlite3 logic
-		return is_sqlite_error(optival.value());
+		return is_sqlite_error( sqlite3_rt );
 	}
-	/*
-	remember the return structure from the above trait is :
-	{{ optional sqlite_status_code },{ optional status message }}
-	here we make conveience macros using the valstat above
-	and the dbj nanolib generic macros
-	*/
-#define DBJ_SQL_VALSTAT_ERR(V_) DBJ_STATVAL_ERR(dbj::sql::sqlite3_valstat_trait, V_)
-#define DBJ_SQL_VALSTAT_OK(V_) DBJ_STATVAL_OK(dbj::sql::sqlite3_valstat_trait, V_)
-
-	/*
-	make vlastat from slqite3 API call, returned int rezult
-	here we avoid making fully populated pair of options thus
-	allowing callers to use the default paradigm
-
-	auto [v,s] = func() ;
-	if (!v) ...then error...
-	*/
-	auto make_dbj_sql_valstat = [] 
-	( int sqlite_3_result_value_ , const char * file_, long line_ ) 
-	{
-		using status_type =
-			::dbj::sql::DBJ_SQL_INNER_NS sqlite_status_code;
-		
-		status_type ssc_ =
-			static_cast<status_type>(sqlite_3_result_value_);
-
-		if (is_sqlite_error(ssc_)) {
-			return sqlite3_valstat_trait::make_error(
-				sqlite3_valstat_trait::make_status( ssc_, file_, line_  )
-			);
-		}
-		else {
-			return sqlite3_valstat_trait::make_ok(ssc_);
-		}
-	};
-
-#define DBJ_SQL_VALSTAT( R_ ) make_dbj_sql_valstat(R_, __FILE__, __LINE__ ) 
-
-	// here we make the OK statval object so we do not re-make it each time we need it
-	inline const dbj_sql_valstat sqlite3_ok_statval 
-		= sqlite3_valstat_trait::make_ok( sqlite_status_code::sqlite_ok) ;
-
-	/* do not go overboard with macros */
-	auto print_on_sql_error = [](dbj_sql_valstat const& S_)
-	{
-		if (::dbj::sql::is_error(S_)) 
-		{ 
-			DBJ_FPRINTF(stderr, DBJ_FG_RED_BOLD "\nERROR Status\n%s\n\n" DBJ_RESET, S_.second->data()); 
-		}
-	};
-
-#define DBJ_RETURN_ON_SQL_ERROR(S_) dbj::sql::print_on_sql_error(S_); return 
 
 } // namespace dbj::sql
 
 
-#endif // !_DBJ_SQLITE_STATUS_INC_
+#endif // !_DBJ_SQLITE_VALSTAT_INC_
